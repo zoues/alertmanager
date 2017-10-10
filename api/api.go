@@ -14,13 +14,26 @@
 package api
 
 import (
+	"bufio"
+	"crypto/md5"
+	"database/sql"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
+	"html/template"
+	"io"
+	"math/rand"
 	"net/http"
+	"os"
+	"os/exec"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/common/log"
@@ -58,24 +71,10 @@ func init() {
 	prometheus.Register(numInvalidAlerts)
 }
 
-var corsHeaders = map[string]string{
-	"Access-Control-Allow-Headers":  "Accept, Authorization, Content-Type, Origin",
-	"Access-Control-Allow-Methods":  "GET, DELETE, OPTIONS",
-	"Access-Control-Allow-Origin":   "*",
-	"Access-Control-Expose-Headers": "Date",
-}
-
-// Enables cross-site script calls.
-func setCORS(w http.ResponseWriter) {
-	for h, v := range corsHeaders {
-		w.Header().Set(h, v)
-	}
-}
-
 // API provides registration of handlers for API routes.
 type API struct {
 	alerts         provider.Alerts
-	silences       *silence.Silences
+	silences       provider.Silences
 	config         *config.Config
 	route          *dispatch.Route
 	resolveTimeout time.Duration
@@ -92,7 +91,7 @@ type groupsFn func([]*labels.Matcher) dispatch.AlertOverview
 type getAlertStatusFn func(model.Fingerprint) types.AlertStatus
 
 // New returns a new API.
-func New(alerts provider.Alerts, silences *silence.Silences, gf groupsFn, sf getAlertStatusFn, router *mesh.Router) *API {
+func New(alerts provider.Alerts, silences *provider.Silences, gf groupsFn, sf getAlertStatusFn, router *mesh.Router) *API {
 	return &API{
 		alerts:         alerts,
 		silences:       silences,
@@ -103,12 +102,116 @@ func New(alerts provider.Alerts, silences *silence.Silences, gf groupsFn, sf get
 	}
 }
 
+type Labels struct {
+	AlertSeverity string `json:"severity"`
+}
+
+type AlertJsonStruct struct {
+	AlertName        string `json:"alert"`
+	AlertAddition    string `json:"if"`
+	AlertTime        string `json:"for"`
+	AlertSeverity    Labels `json:"labels"`
+	AlertDescription string `json:"annotations"`
+}
+
+type alertsResponseJSONStruct struct {
+	Array []AlertJsonStruct `json:"alerts"`
+}
+
+type AlertInfo struct {
+	Status       string     `json:"status"`
+	Labels       Label      `json:"labels"`
+	Annotations  Annotation `json:"annotations"`
+	StartsAt     string     `json:"startsAt"`
+	EndsAt       string     `json:"endsAt"`
+	GeneratorURL string     `json:"generatorURL"`
+}
+
+type Annotation struct {
+	Description string `json:"description"`
+	Summary     string `json:"summary"`
+}
+
+type Label struct {
+	AlertName string `json:"alertname，omitempty"`
+	Group     string `json:"group，omitempty"`
+	Instance  string `json:"instance，omitempty"`
+	Job       string `json:"job，omitempty"`
+	Monitor   string `json:"monitor，omitempty"`
+	Severity  string `json:"severity，omitempty"`
+}
+type GroupLabel struct {
+	AlertName string `json:"alertname，omitempty"`
+}
+
+type AlarmJsonStruct struct {
+	Receiver     string      `json:"-"`
+	Status       string      `json:"-"`
+	Alerts       []AlertInfo `json:"alerts"`
+	GroupLabels  GroupLabel  `json:"groupLabels"`
+	CommonLabels Label       `json:"commonLabels"`
+	ExternalURL  string      `json:"externalURL"`
+	Version      string      `json:"version"`
+	GroupKey     uint64      `json:"groupKey"`
+}
+
+type Member struct {
+	Source      string `xml:"source,attr"`
+	Code        string `xml:"code,attr"`
+	Grade       string `xml:"grade,attr"`
+	Time        string `xml:"time,attr"`
+	CaseId      string `xml:"caseid,attr"`
+	Description string `xml:",chardata"`
+}
+
+type Struct struct {
+	Name    string `xml:"dn,attr"`
+	Members Member `xml:"alarm"`
+}
+
+type Result struct {
+	XMLName xml.Name `xml:"dc"`
+	Structs []Struct `xml:"mo"`
+}
+
+type UserModal struct {
+	Uid      int     `json:"uid"`
+	Uname    string  `json:"uname"`
+	Mname    string  `json:"mname"`
+	Cpus     float64 `json:"cpus"`
+	Mem      float64 `json:"mem"`
+	Disk     float64 `json:"disk"`
+	Instance float64 `json:"instances"`
+}
+type ModalResponseJSONStruct struct {
+	Array []UserModal `json:"modals"`
+}
+
+// alert teml
+const templ = `
+{{range .Array}}
+ALERT {{.AlertName}}
+IF {{.AlertAddition}}
+FOR {{.AlertTime}}
+LABELS { severity = '{{.AlertSeverity.AlertSeverity}}' }
+ANNOTATIONS {
+    summary = '{{.AlertDescription}}',
+    description = '{{.AlertDescription}}',
+}
+{{end}}
+`
+
+func GetMd5String(s string) string {
+	h := md5.New()
+	h.Write([]byte(s))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 // Register registers the API handlers under their correct routes
 // in the given router.
 func (api *API) Register(r *route.Router) {
 	ihf := func(name string, f http.HandlerFunc) http.HandlerFunc {
 		return prometheus.InstrumentHandlerFunc(name, func(w http.ResponseWriter, r *http.Request) {
-			setCORS(w)
 			f(w, r)
 		})
 	}
@@ -128,10 +231,102 @@ func (api *API) Register(r *route.Router) {
 	r.Get("/alerts", ihf("list_alerts", api.listAlerts))
 	r.Post("/alerts", ihf("add_alerts", api.addAlerts))
 
+	// alarms crud api
+	r.Get("/alarms", ihf("list_alarms", api.listAlarms))
+	r.Post("/alarms", ihf("add_alarm", api.addAlarm))
+	r.Post("/alarms/:alarmname", ihf("edit_alarm", api.editAlarm))
+	r.Del("/alarms/:alarmname", ihf("del_alarm", api.delAlarm))
+
+	// bomc alarm
+	r.Post("/bomc/webhook", ihf("webhook", api.webhook))
+	r.Get("/bomc", ihf("list_bomcs", api.listBomcs))
+	r.Post("/bomc", ihf("add_bomcs", api.addBomcs))
+	r.Put("/bomc/:bomcid", ihf("update_bomcs", api.updateBomcs))
+	r.Del("/bomc/:bomcid", ihf("delete_bomcs", api.deleteBomcs))
+
 	r.Get("/silences", ihf("list_silences", api.listSilences))
 	r.Post("/silences", ihf("add_silence", api.setSilence))
 	r.Get("/silence/:sid", ihf("get_silence", api.getSilence))
 	r.Del("/silence/:sid", ihf("del_silence", api.delSilence))
+
+	// modal crub
+	r.Get("/modals/:username", ihf("list_modals", api.listModals))
+	r.Post("/modals/:username", ihf("add_modal", api.addModal))
+	r.Put("/modals/:modalid", ihf("update_modal", api.updateModal))
+	r.Del("/modals/:modalid", ihf("delete_modal", api.deleteModal))
+
+}
+
+// Bomc define
+type Bomc struct {
+	BomcID      string `json:"bomcID"`
+	Description string `json:"description"`
+}
+
+func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
+	var s AlarmJsonStruct
+	grade := map[string]string{
+		"critical": "4",
+		"major":    "3",
+		"minor":    "2",
+		"warning":  "1",
+	}
+	//fmt.Printf("json post reciver %s", r)
+	if err := receive(r, &s); err != nil {
+		respondError(w, apiError{
+			typ: errorBadData,
+			err: err,
+		}, nil)
+		return
+	}
+	for i := 0; i < len(s.Alerts); i++ {
+		var Source string
+		var ALARMID string
+		caseID := s.Alerts[i].Labels.AlertName + s.Alerts[i].Labels.Instance
+
+		startAt, err := time.Parse("2006-01-02__15:04:05", s.Alerts[i].StartsAt)
+		if err != nil {
+			panic(err)
+		}
+
+		fmt.Printf("s.Alerts[i].Labels.Group :%#v,len:%#v\n", s.Alerts[i].Labels.Group, len(s.Alerts[i].Labels.Group))
+		fmt.Printf("s description :%#v", strings.Split(s.Alerts[i].Annotations.Description, ":"))
+
+		description := strings.Split(s.Alerts[i].Annotations.Description, ":")
+		ALARM := strings.Split(s.Alerts[i].Annotations.Description, "#")
+
+		if len(ALARM) == 3 {
+			ALARMID = ALARM[2]
+		}
+		if strings.Split(s.Alerts[i].Annotations.Description, ":")[1] == "node" {
+			Source = s.Alerts[i].Labels.Instance
+		} else {
+			Source = strings.Split(s.Alerts[i].Annotations.Description, ":")[7]
+		}
+
+		cmd := exec.Command("trap4j", `$OID`, `$COMPONENT`, `$ALERTGROUP`,
+			`$ALARMID`, `$INSTANCE`, `$ALARMCONTENT`,
+			`$REVOKEID`, `$VALUE`, `$TIME`)
+
+		cmd.Env = append(os.Environ(),
+			"OID=9001.221",
+			"COMPONENT="+Source,
+			"ALERTGROUP="+description[1],
+			"ALARMID="+ALARMID,
+			"INSTANCE="+caseID,
+			"ALARMCONTENT="+s.Alerts[i].Annotations.Description,
+			"REVOKEID=1",
+			"VALUE="+description[4],
+			"TIME="+startAt,
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			fmt.Println(err)
+		}
+
+	}
+
+	respond(w, nil)
 }
 
 // Update sets the configuration string to a new value.
@@ -541,6 +736,386 @@ func (api *API) getSilence(w http.ResponseWriter, r *http.Request) {
 	respond(w, sil)
 }
 
+func (api *API) listAlarms(w http.ResponseWriter, r *http.Request) {
+	api.mtx.RLock()
+	defer api.mtx.RUnlock()
+	var rs alertsResponseJSONStruct
+	var al AlertJsonStruct
+	file, err := os.Open("/etc/alertmanager/alert.rules")
+	defer file.Close()
+	if err != nil {
+		http.Error(w, fmt.Sprint("Error getting alarms: ", err), http.StatusNotFound)
+		return
+	}
+	rd := bufio.NewReader(file)
+	for {
+		line, err := rd.ReadString('\n')
+		line = strings.Replace(line, "\n", "", -1)
+		if err != nil || io.EOF == err {
+			break
+		}
+		switch {
+		case strings.Contains(line, "ALERT"):
+			al.AlertName = strings.Split(line, " ")[1]
+		case strings.Contains(line, "IF"):
+			al.AlertAddition = strings.Trim(strings.Split(line, "IF")[1], " ")
+		case strings.Contains(line, "FOR"):
+			al.AlertTime = strings.Split(line, " ")[1]
+		case strings.Contains(line, "LABELS"):
+			al.AlertSeverity = Labels{AlertSeverity: strings.Split(line, "'")[1]}
+		case strings.Contains(line, "summary"):
+			al.AlertDescription = strings.Split(line, "'")[1]
+			fmt.Printf("Alert list %#v", al)
+			rs.Array = append(rs.Array, al)
+
+		}
+	}
+	respond(w, &rs)
+}
+
+func (api *API) addAlarm(w http.ResponseWriter, r *http.Request) {
+	api.mtx.Lock()
+	defer api.mtx.Unlock()
+
+	var rs alertsResponseJSONStruct
+	var al AlertJsonStruct
+	file, err := os.Open("/etc/alertmanager/alert.rules")
+	if err != nil {
+		http.Error(w, fmt.Sprint("Error getting alarms: ", err), http.StatusNotFound)
+		return
+	}
+	rd := bufio.NewReader(file)
+	var result AlertJsonStruct
+	fmt.Printf("request body", r.Body)
+	if err := receive(r, &result); err != nil {
+		respondError(w, apiError{
+			typ: errorBadData,
+			err: err,
+		}, nil)
+		return
+	}
+	fmt.Printf("add alarm %#v", result)
+	for {
+		line, err := rd.ReadString('\n')
+		line = strings.Replace(line, "\n", "", -1)
+		if err != nil || io.EOF == err {
+			break
+		}
+		switch {
+		case strings.Contains(line, "ALERT"):
+			al.AlertName = strings.Split(line, " ")[1]
+			if result.AlertName == al.AlertName {
+				respondError(w, apiError{
+					typ: errorBadData,
+					err: fmt.Errorf("%s conflict", result.AlertName),
+				}, nil)
+			}
+
+		case strings.Contains(line, "IF"):
+			al.AlertAddition = strings.Trim(strings.Split(line, "IF")[1], " ")
+		case strings.Contains(line, "FOR"):
+			al.AlertTime = strings.Split(line, " ")[1]
+		case strings.Contains(line, "LABELS"):
+			al.AlertSeverity = Labels{AlertSeverity: strings.Split(line, "'")[1]}
+		case strings.Contains(line, "summary"):
+			al.AlertDescription = strings.Split(line, "'")[1]
+			fmt.Printf("Alert list %#v\n", al)
+			rs.Array = append(rs.Array, al)
+
+		}
+	}
+	rs.Array = append(rs.Array, result)
+
+	file.Close()
+	// write into alert.rules
+	tmpl, err := template.New("alert").Parse(templ)
+	if err != nil {
+		panic(err)
+	}
+	filew, err := os.Create("/etc/alertmanager/alert.rules")
+	err = tmpl.Execute(filew, rs)
+	if err != nil {
+		panic(err)
+	}
+	filew.Close()
+
+	//reload promethues
+	//w.Header().Set("My-Awesome-Header", "Rocks")
+
+	client := &http.Client{}
+	req, err := http.NewRequest("POST", "http://127.0.0.1:9090/-/reload", nil)
+	res, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("post reload error %# v", err)
+	}
+	//respond(w, res)
+	fmt.Printf("reload config %#v", res)
+	return
+
+}
+func (api *API) editAlarm(w http.ResponseWriter, r *http.Request) {
+	api.mtx.Lock()
+	defer api.mtx.Unlock()
+	var rs alertsResponseJSONStruct
+	var al AlertJsonStruct
+	file, err := os.Open("/etc/alertmanager/alert.rules")
+	if err != nil {
+		http.Error(w, fmt.Sprint("Error getting alarms: ", err), http.StatusNotFound)
+		return
+	}
+	rd := bufio.NewReader(file)
+	alertName := route.Param(api.context(r), "alarmname")
+
+	var result AlertJsonStruct
+	if err := receive(r, &result); err != nil {
+		respondError(w, apiError{
+			typ: errorBadData,
+			err: err,
+		}, nil)
+		return
+	}
+	fmt.Printf("add alarm %#v", result)
+	for {
+		line, err := rd.ReadString('\n')
+		line = strings.Replace(line, "\n", "", -1)
+		if err != nil || io.EOF == err {
+			break
+		}
+		switch {
+		case strings.Contains(line, "ALERT"):
+			al.AlertName = strings.Split(line, " ")[1]
+			if alertName == al.AlertName && result.AlertName != alertName {
+				respondError(w, apiError{
+					typ: errorBadData,
+					err: fmt.Errorf("%s must not be edited", result.AlertName),
+				}, nil)
+			} else if alertName == al.AlertName && result.AlertName == alertName {
+				break
+			}
+		case strings.Contains(line, "IF"):
+			al.AlertAddition = strings.Trim(strings.Split(line, "IF")[1], " ")
+		case strings.Contains(line, "FOR"):
+			al.AlertTime = strings.Split(line, " ")[1]
+		case strings.Contains(line, "LABELS"):
+			al.AlertSeverity = Labels{AlertSeverity: strings.Split(line, "'")[1]}
+		case strings.Contains(line, "summary"):
+			al.AlertDescription = strings.Split(line, "'")[1]
+
+			if alertName == al.AlertName {
+				rs.Array = append(rs.Array, result)
+			} else {
+				rs.Array = append(rs.Array, al)
+			}
+			fmt.Printf("Alert list %#v\n", al)
+
+		}
+	}
+
+	file.Close()
+	// write into alert.rules
+	tmpl, err := template.New("alert").Parse(templ)
+	if err != nil {
+		panic(err)
+	}
+	filew, err := os.Create("/etc/alertmanager/alert.rules")
+	err = tmpl.Execute(filew, rs)
+	if err != nil {
+		panic(err)
+	}
+	filew.Close()
+
+	//reload promethues
+	//w.Header().Set("My-Awesome-Header", "Rocks")
+	client := &http.Client{}
+	req, err := http.NewRequest("POST", "http://127.0.0.1:9090/-/reload", nil)
+	res, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("post reload error %# v", err)
+	}
+	//respond(w, res)
+	fmt.Printf("reload config %#v", res)
+	return
+
+}
+
+func (api *API) delAlarm(w http.ResponseWriter, r *http.Request) {
+	api.mtx.Lock()
+	defer api.mtx.Unlock()
+	var rs alertsResponseJSONStruct
+	var al AlertJsonStruct
+	file, err := os.Open("/etc/alertmanager/alert.rules")
+	if err != nil {
+		http.Error(w, fmt.Sprint("Error getting alarms: ", err), http.StatusNotFound)
+		return
+	}
+	rd := bufio.NewReader(file)
+	result := route.Param(api.context(r), "alarmname")
+
+	for {
+		line, err := rd.ReadString('\n')
+		line = strings.Replace(line, "\n", "", -1)
+		if err != nil || io.EOF == err {
+			break
+		}
+		switch {
+		case strings.Contains(line, "ALERT"):
+			al.AlertName = strings.Split(line, " ")[1]
+		case strings.Contains(line, "IF"):
+			al.AlertAddition = strings.Trim(strings.Split(line, "IF")[1], " ")
+		case strings.Contains(line, "FOR"):
+			al.AlertTime = strings.Split(line, " ")[1]
+		case strings.Contains(line, "LABELS"):
+			al.AlertSeverity = Labels{AlertSeverity: strings.Split(line, "'")[1]}
+		case strings.Contains(line, "summary"):
+			al.AlertDescription = strings.Split(line, "'")[1]
+			if result == al.AlertName {
+				fmt.Printf("alarmname %s", result)
+				break
+			} else {
+				rs.Array = append(rs.Array, al)
+			}
+		}
+	}
+	// write into alert.rules
+	tmpl, err := template.New("alert").Parse(templ)
+	if err != nil {
+		panic(err)
+	}
+	filew, err := os.Create("/etc/alertmanager/alert.rules")
+	err = tmpl.Execute(filew, rs)
+	if err != nil {
+		panic(err)
+
+	}
+	filew.Close()
+
+	//reload promethues
+	//w.Header().Set("My-Awesome-Header", "Rocks")
+	client := &http.Client{}
+	req, err := http.NewRequest("POST", "http://127.0.0.1:9090/-/reload", nil)
+	res, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("post reload error %# v", err)
+	}
+	fmt.Printf("reload config %#v", res)
+
+	//respond(w, res)
+	return
+}
+
+func checkErr(w http.ResponseWriter, err error) {
+	if err != nil {
+		fmt.Printf("found err %s", err)
+		return
+	}
+}
+
+func (api *API) listModals(w http.ResponseWriter, r *http.Request) {
+
+	username := route.Param(api.context(r), "username")
+	db, err := sql.Open("sqlite3", "./modal.db")
+	defer db.Close()
+	_, err = db.Exec("CREATE TABLE  IF NOT EXISTS userinfo(Uid INTEGER PRIMARY KEY AUTOINCREMENT,Uname VARCHAR(64) NOT NULL,Mname VARCHAR(64) NOT NULL,Cpus FLOAT NOT NULL DEFAULT 0,Mem FLOAT NOT NULL DEFAULT 0,Disk FLOAT NOT NULL DEFAULT 0,Instance FLOAT NOT NULL DEFAULT 0)")
+	sqlStr := fmt.Sprintf("SELECT * FROM userinfo where Uname=%q", username)
+	rows, err := db.Query(sqlStr)
+	defer rows.Close()
+	checkErr(w, err)
+	var result []UserModal
+	for rows.Next() {
+		var user UserModal
+
+		err = rows.Scan(&user.Uid, &user.Uname, &user.Mname, &user.Cpus, &user.Mem, &user.Disk, &user.Instance)
+		checkErr(w, err)
+		result = append(result, user)
+	}
+
+	respond(w, &result)
+}
+
+func (api *API) addModal(w http.ResponseWriter, r *http.Request) {
+
+	username := route.Param(api.context(r), "username")
+
+	var user UserModal
+	if err := receive(r, &user); err != nil {
+		respondError(w, apiError{
+			typ: errorBadData,
+			err: err,
+		}, nil)
+		return
+	}
+
+	db, err := sql.Open("sqlite3", "./modal.db")
+	defer db.Close()
+	checkErr(w, err)
+	stmt, err := db.Prepare("INSERT INTO userinfo(Uname,Mname, Cpus, Mem, Disk, Instance) values(?,?,?,?,?,?)")
+	checkErr(w, err)
+
+	res, err := stmt.Exec(username, user.Mname, user.Cpus, user.Mem, user.Disk, user.Instance)
+	checkErr(w, err)
+
+	respond(w, res)
+}
+
+func (api *API) updateModal(w http.ResponseWriter, r *http.Request) {
+	api.mtx.Lock()
+	defer api.mtx.Unlock()
+	modalId := route.Param(api.context(r), "modalid")
+	var user UserModal
+	if err := receive(r, &user); err != nil {
+		respondError(w, apiError{
+			typ: errorBadData,
+			err: err,
+		}, nil)
+		return
+	}
+	db, err := sql.Open("sqlite3", "./modal.db")
+	defer db.Close()
+
+	checkErr(w, err)
+	stmt, err := db.Prepare("update userinfo set Mname=?,Cpus=?, Mem=?, Disk=?, Instance=? where Uid=?")
+	checkErr(w, err)
+
+	res, err := stmt.Exec(user.Mname, user.Cpus, user.Mem, user.Disk, user.Instance, modalId)
+	checkErr(w, err)
+
+	affect, err := res.RowsAffected()
+	checkErr(w, err)
+
+	respond(w, affect)
+
+}
+
+func (api *API) deleteModal(w http.ResponseWriter, r *http.Request) {
+	api.mtx.Lock()
+	defer api.mtx.Unlock()
+	modalId := route.Param(api.context(r), "modalid")
+
+	db, err := sql.Open("sqlite3", "./modal.db")
+	defer db.Close()
+
+	checkErr(w, err)
+	stmt, err := db.Prepare("delete from userinfo where Uid=?")
+	checkErr(w, err)
+
+	res, err := stmt.Exec(modalId)
+	checkErr(w, err)
+
+	respond(w, res)
+
+}
+
+func GetRandomString(leng int) string {
+	str := "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+	bytes := []byte(str)
+	result := []byte{}
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	for i := 0; i < leng; i++ {
+		result = append(result, bytes[r.Intn(len(bytes))])
+	}
+	return string(result)
+}
+
 func (api *API) delSilence(w http.ResponseWriter, r *http.Request) {
 	sid := route.Param(r.Context(), "sid")
 
@@ -754,4 +1329,102 @@ func receive(r *http.Request, v interface{}) error {
 		log.Debugf("Decoding request failed: %v", err)
 	}
 	return err
+}
+
+// bomc
+func (api *API) listBomcs(w http.ResponseWriter, r *http.Request) {
+
+	db, err := sql.Open("sqlite3", "./modal.db")
+	defer db.Close()
+	_, err = db.Exec("CREATE TABLE  IF NOT EXISTS bomc(Bid INTEGER PRIMARY KEY AUTOINCREMENT,bomcID VARCHAR(50) NOT NULL,description VARCHAR(128) NOT NULL)")
+	sqlStr := fmt.Sprintf("SELECT bomcID, description FROM bomc ")
+	rows, err := db.Query(sqlStr)
+	defer rows.Close()
+	checkErr(w, err)
+	var result []Bomc
+	for rows.Next() {
+		var user Bomc
+
+		err = rows.Scan(&user.BomcID, &user.Description)
+		checkErr(w, err)
+		result = append(result, user)
+	}
+
+	respond(w, &result)
+}
+
+func (api *API) addBomcs(w http.ResponseWriter, r *http.Request) {
+
+	var users []Bomc
+	if err := receive(r, &users); err != nil {
+		respondError(w, apiError{
+			typ: errorBadData,
+			err: err,
+		}, nil)
+		return
+	}
+
+	db, err := sql.Open("sqlite3", "./modal.db")
+	defer db.Close()
+	checkErr(w, err)
+	_, err = db.Exec("CREATE TABLE  IF NOT EXISTS bomc(Bid INTEGER PRIMARY KEY AUTOINCREMENT,bomcID VARCHAR(50) NOT NULL,description VARCHAR(128) NOT NULL)")
+	for _, user := range users {
+		stmt, err := db.Prepare("INSERT INTO bomc(bomcID,description) values(?,?)")
+		checkErr(w, err)
+		res, err := stmt.Exec(Bomc.BomcID, Bomc.Description)
+		checkErr(w, err)
+	}
+
+	respond(w, res)
+}
+
+func (api *API) updateBomc(w http.ResponseWriter, r *http.Request) {
+	api.mtx.Lock()
+	defer api.mtx.Unlock()
+	bomcID := route.Param(api.context(r), "bomcID")
+	var user Bomc
+	if err := receive(r, &user); err != nil {
+		respondError(w, apiError{
+			typ: errorBadData,
+			err: err,
+		}, nil)
+		return
+	}
+	db, err := sql.Open("sqlite3", "./modal.db")
+	defer db.Close()
+
+	checkErr(w, err)
+	_, err = db.Exec("CREATE TABLE  IF NOT EXISTS bomc(Bid INTEGER PRIMARY KEY AUTOINCREMENT,bomcID VARCHAR(50) NOT NULL,description VARCHAR(128) NOT NULL)")
+
+	stmt, err := db.Prepare("update bomc set description=? where bomcID=?")
+	checkErr(w, err)
+
+	res, err := stmt.Exec(user.Description, bomcID)
+	checkErr(w, err)
+
+	affect, err := res.RowsAffected()
+	checkErr(w, err)
+
+	respond(w, affect)
+
+}
+
+func (api *API) deleteBomc(w http.ResponseWriter, r *http.Request) {
+	api.mtx.Lock()
+	defer api.mtx.Unlock()
+	bomcID := route.Param(api.context(r), "bomcID")
+
+	db, err := sql.Open("sqlite3", "./modal.db")
+	defer db.Close()
+	_, err = db.Exec("CREATE TABLE  IF NOT EXISTS bomc(Bid INTEGER PRIMARY KEY AUTOINCREMENT,bomcID VARCHAR(50) NOT NULL,description VARCHAR(128) NOT NULL)")
+
+	checkErr(w, err)
+	stmt, err := db.Prepare("delete from bomc where bomcID=?")
+	checkErr(w, err)
+
+	res, err := stmt.Exec(bomcID)
+	checkErr(w, err)
+
+	respond(w, res)
+
 }
