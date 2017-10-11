@@ -74,7 +74,7 @@ func init() {
 // API provides registration of handlers for API routes.
 type API struct {
 	alerts         provider.Alerts
-	silences       provider.Silences
+	silences       *silence.Silences
 	config         *config.Config
 	route          *dispatch.Route
 	resolveTimeout time.Duration
@@ -91,7 +91,7 @@ type groupsFn func([]*labels.Matcher) dispatch.AlertOverview
 type getAlertStatusFn func(model.Fingerprint) types.AlertStatus
 
 // New returns a new API.
-func New(alerts provider.Alerts, silences *provider.Silences, gf groupsFn, sf getAlertStatusFn, router *mesh.Router) *API {
+func New(alerts provider.Alerts, silences *silence.Silences, gf groupsFn, sf getAlertStatusFn, router *mesh.Router) *API {
 	return &API{
 		alerts:         alerts,
 		silences:       silences,
@@ -241,8 +241,8 @@ func (api *API) Register(r *route.Router) {
 	r.Post("/bomc/webhook", ihf("webhook", api.webhook))
 	r.Get("/bomc", ihf("list_bomcs", api.listBomcs))
 	r.Post("/bomc", ihf("add_bomcs", api.addBomcs))
-	r.Put("/bomc/:bomcid", ihf("update_bomcs", api.updateBomcs))
-	r.Del("/bomc/:bomcid", ihf("delete_bomcs", api.deleteBomcs))
+	r.Put("/bomc/:bomcid", ihf("update_bomcs", api.updateBomc))
+	r.Del("/bomc/:bomcid", ihf("delete_bomcs", api.deleteBomc))
 
 	r.Get("/silences", ihf("list_silences", api.listSilences))
 	r.Post("/silences", ihf("add_silence", api.setSilence))
@@ -265,13 +265,16 @@ type Bomc struct {
 
 func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
 	var s AlarmJsonStruct
-	grade := map[string]string{
-		"critical": "4",
-		"major":    "3",
-		"minor":    "2",
-		"warning":  "1",
-	}
-	//fmt.Printf("json post reciver %s", r)
+	/*
+		grade := map[string]string{
+			"critical": "4",
+			"major":    "3",
+			"minor":    "2",
+			"warning":  "1",
+		}
+		fmt.Printf("json post reciver %s", r)
+	*/
+
 	if err := receive(r, &s); err != nil {
 		respondError(w, apiError{
 			typ: errorBadData,
@@ -317,12 +320,13 @@ func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
 			"ALARMCONTENT="+s.Alerts[i].Annotations.Description,
 			"REVOKEID=1",
 			"VALUE="+description[4],
-			"TIME="+startAt,
+			"TIME="+startAt.String(),
 		)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			fmt.Println(err)
 		}
+		fmt.Println(out)
 
 	}
 
@@ -864,7 +868,7 @@ func (api *API) editAlarm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rd := bufio.NewReader(file)
-	alertName := route.Param(api.context(r), "alarmname")
+	alertName := route.Param(r.Context(), "alarmname")
 
 	var result AlertJsonStruct
 	if err := receive(r, &result); err != nil {
@@ -949,7 +953,7 @@ func (api *API) delAlarm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rd := bufio.NewReader(file)
-	result := route.Param(api.context(r), "alarmname")
+	result := route.Param(r.Context(), "alarmname")
 
 	for {
 		line, err := rd.ReadString('\n')
@@ -1012,7 +1016,7 @@ func checkErr(w http.ResponseWriter, err error) {
 
 func (api *API) listModals(w http.ResponseWriter, r *http.Request) {
 
-	username := route.Param(api.context(r), "username")
+	username := route.Param(r.Context(), "username")
 	db, err := sql.Open("sqlite3", "./modal.db")
 	defer db.Close()
 	_, err = db.Exec("CREATE TABLE  IF NOT EXISTS userinfo(Uid INTEGER PRIMARY KEY AUTOINCREMENT,Uname VARCHAR(64) NOT NULL,Mname VARCHAR(64) NOT NULL,Cpus FLOAT NOT NULL DEFAULT 0,Mem FLOAT NOT NULL DEFAULT 0,Disk FLOAT NOT NULL DEFAULT 0,Instance FLOAT NOT NULL DEFAULT 0)")
@@ -1034,7 +1038,7 @@ func (api *API) listModals(w http.ResponseWriter, r *http.Request) {
 
 func (api *API) addModal(w http.ResponseWriter, r *http.Request) {
 
-	username := route.Param(api.context(r), "username")
+	username := route.Param(r.Context(), "username")
 
 	var user UserModal
 	if err := receive(r, &user); err != nil {
@@ -1060,7 +1064,7 @@ func (api *API) addModal(w http.ResponseWriter, r *http.Request) {
 func (api *API) updateModal(w http.ResponseWriter, r *http.Request) {
 	api.mtx.Lock()
 	defer api.mtx.Unlock()
-	modalId := route.Param(api.context(r), "modalid")
+	modalId := route.Param(r.Context(), "modalid")
 	var user UserModal
 	if err := receive(r, &user); err != nil {
 		respondError(w, apiError{
@@ -1089,7 +1093,7 @@ func (api *API) updateModal(w http.ResponseWriter, r *http.Request) {
 func (api *API) deleteModal(w http.ResponseWriter, r *http.Request) {
 	api.mtx.Lock()
 	defer api.mtx.Unlock()
-	modalId := route.Param(api.context(r), "modalid")
+	modalId := route.Param(r.Context(), "modalid")
 
 	db, err := sql.Open("sqlite3", "./modal.db")
 	defer db.Close()
@@ -1371,17 +1375,17 @@ func (api *API) addBomcs(w http.ResponseWriter, r *http.Request) {
 	for _, user := range users {
 		stmt, err := db.Prepare("INSERT INTO bomc(bomcID,description) values(?,?)")
 		checkErr(w, err)
-		res, err := stmt.Exec(Bomc.BomcID, Bomc.Description)
+		_, err = stmt.Exec(user.BomcID, user.Description)
 		checkErr(w, err)
 	}
 
-	respond(w, res)
+	respond(w, nil)
 }
 
 func (api *API) updateBomc(w http.ResponseWriter, r *http.Request) {
 	api.mtx.Lock()
 	defer api.mtx.Unlock()
-	bomcID := route.Param(api.context(r), "bomcID")
+	bomcID := route.Param(r.Context(), "bomcID")
 	var user Bomc
 	if err := receive(r, &user); err != nil {
 		respondError(w, apiError{
@@ -1412,7 +1416,7 @@ func (api *API) updateBomc(w http.ResponseWriter, r *http.Request) {
 func (api *API) deleteBomc(w http.ResponseWriter, r *http.Request) {
 	api.mtx.Lock()
 	defer api.mtx.Unlock()
-	bomcID := route.Param(api.context(r), "bomcID")
+	bomcID := route.Param(r.Context(), "bomcID")
 
 	db, err := sql.Open("sqlite3", "./modal.db")
 	defer db.Close()
