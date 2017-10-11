@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"io/ioutil"
 	"math/rand"
 	"net/http"
 	"os"
@@ -264,7 +265,7 @@ type Bomc struct {
 }
 
 func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
-	var s AlarmJsonStruct
+	var s []model.Alert
 	/*
 		grade := map[string]string{
 			"critical": "4",
@@ -282,29 +283,29 @@ func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
 		}, nil)
 		return
 	}
-	for i := 0; i < len(s.Alerts); i++ {
-		var Source string
-		var ALARMID string
-		caseID := s.Alerts[i].Labels.AlertName + s.Alerts[i].Labels.Instance
+	for _, alert := range s {
+		var Source, caseID, ALARMID string
 
-		startAt, err := time.Parse("2006-01-02__15:04:05", s.Alerts[i].StartsAt)
+		if instance, ok := alert.Labels["instance"]; ok {
+			caseID = string(alert.Labels["alertname"]) + string(instance)
+		}
+		caseID = string(alert.Labels["alertname"])
+
+		startAt, err := time.Parse("2006-01-02__15:04:05", alert.StartsAt.String())
 		if err != nil {
 			panic(err)
 		}
 
-		fmt.Printf("s.Alerts[i].Labels.Group :%#v,len:%#v\n", s.Alerts[i].Labels.Group, len(s.Alerts[i].Labels.Group))
-		fmt.Printf("s description :%#v", strings.Split(s.Alerts[i].Annotations.Description, ":"))
-
-		description := strings.Split(s.Alerts[i].Annotations.Description, ":")
-		ALARM := strings.Split(s.Alerts[i].Annotations.Description, "#")
+		description := strings.Split(string(alert.Annotations["description"]), ":")
+		ALARM := strings.Split(string(alert.Annotations["description"]), "#")
 
 		if len(ALARM) == 3 {
 			ALARMID = ALARM[2]
 		}
-		if strings.Split(s.Alerts[i].Annotations.Description, ":")[1] == "node" {
-			Source = s.Alerts[i].Labels.Instance
+		if strings.Split(string(alert.Annotations["description"]), ":")[1] == "node" {
+			Source = string(alert.Labels["instance"])
 		} else {
-			Source = strings.Split(s.Alerts[i].Annotations.Description, ":")[7]
+			Source = strings.Split(string(alert.Annotations["description"]), ":")[7]
 		}
 
 		cmd := exec.Command("trap4j", `$OID`, `$COMPONENT`, `$ALERTGROUP`,
@@ -317,7 +318,7 @@ func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
 			"ALERTGROUP="+description[1],
 			"ALARMID="+ALARMID,
 			"INSTANCE="+caseID,
-			"ALARMCONTENT="+s.Alerts[i].Annotations.Description,
+			"ALARMCONTENT="+string(alert.Annotations["description"]),
 			"REVOKEID=1",
 			"VALUE="+description[4],
 			"TIME="+startAt.String(),
@@ -326,7 +327,7 @@ func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			fmt.Println(err)
 		}
-		fmt.Println(out)
+		fmt.Printf("output:=======%s", out)
 
 	}
 
@@ -1325,6 +1326,8 @@ func respondError(w http.ResponseWriter, apiErr apiError, data interface{}) {
 }
 
 func receive(r *http.Request, v interface{}) error {
+	icontent, _ := ioutil.ReadAll(r.Body)
+	fmt.Printf("=============%s", string(icontent))
 	dec := json.NewDecoder(r.Body)
 	defer r.Body.Close()
 
