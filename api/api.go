@@ -152,7 +152,7 @@ type AlarmJsonStruct struct {
 	CommonLabels Label       `json:"commonLabels"`
 	ExternalURL  string      `json:"externalURL"`
 	Version      string      `json:"version"`
-	GroupKey     uint64      `json:"groupKey"`
+	GroupKey     string      `json:"groupKey"`
 }
 
 type Member struct {
@@ -264,7 +264,7 @@ type Bomc struct {
 }
 
 func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
-	var s []model.Alert
+	var s AlarmJsonStruct
 	/*
 		grade := map[string]string{
 			"critical": "4",
@@ -282,32 +282,33 @@ func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
 		}, nil)
 		return
 	}
-	for _, alert := range s {
+	for _, alert := range s.Alerts {
 		var Source, caseID, ALARMID string
 
-		if instance, ok := alert.Labels["instance"]; ok {
-			caseID = string(alert.Labels["alertname"]) + string(instance)
+		if alert.Labels.Instance != "" {
+			caseID = alert.Labels.AlertName + alert.Labels.Instance
+		} else {
+			caseID = alert.Labels.AlertName
 		}
-		caseID = string(alert.Labels["alertname"])
 
-		startAt, err := time.Parse("2006-01-02__15:04:05", alert.StartsAt.String())
+		startAt, err := time.Parse("2006-01-02__15:04:05", alert.StartsAt)
 		if err != nil {
 			panic(err)
 		}
 
-		description := strings.Split(string(alert.Annotations["description"]), ":")
-		ALARM := strings.Split(string(alert.Annotations["description"]), "#")
+		description := strings.Split(alert.Annotations.Description, ":")
+		ALARM := strings.Split(alert.Annotations.Description, "#")
 
 		if len(ALARM) == 3 {
 			ALARMID = ALARM[2]
 		}
-		if strings.Split(string(alert.Annotations["description"]), ":")[1] == "node" {
-			Source = string(alert.Labels["instance"])
+		if strings.Split(alert.Annotations.Description, ":")[1] == "node" {
+			Source = alert.Labels.Instance
 		} else {
-			Source = strings.Split(string(alert.Annotations["description"]), ":")[7]
+			Source = strings.Split(alert.Annotations.Description, ":")[7]
 		}
 
-		cmd := exec.Command("trap4j", `$OID`, `$COMPONENT`, `$ALERTGROUP`,
+		cmd := exec.Command("echo", `-e`, `$OID`, `$COMPONENT`, `$ALERTGROUP`,
 			`$ALARMID`, `$INSTANCE`, `$ALARMCONTENT`,
 			`$REVOKEID`, `$VALUE`, `$TIME`)
 
@@ -317,7 +318,7 @@ func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
 			"ALERTGROUP="+description[1],
 			"ALARMID="+ALARMID,
 			"INSTANCE="+caseID,
-			"ALARMCONTENT="+string(alert.Annotations["description"]),
+			"ALARMCONTENT="+alert.Annotations.Description,
 			"REVOKEID=1",
 			"VALUE="+description[4],
 			"TIME="+startAt.String(),
@@ -1330,6 +1331,7 @@ func receive(r *http.Request, v interface{}) error {
 
 	err := dec.Decode(v)
 	if err != nil {
+		fmt.Printf("========= %v", err)
 		log.Debugf("Decoding request failed: %v", err)
 	}
 	return err
