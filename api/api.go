@@ -291,7 +291,7 @@ func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
 			caseID = alert.Labels.AlertName
 		}
 
-		startAt, err := time.Parse("2006-01-02__15:04:05", alert.StartsAt)
+		startAt, err := time.Parse("YYYY-MM-DD_hh:mm:ss", alert.StartsAt)
 		if err != nil {
 			panic(err)
 		}
