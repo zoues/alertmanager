@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"html/template"
 	"io"
-	"io/ioutil"
 	"math/rand"
 	"net/http"
 	"os"
@@ -242,8 +241,8 @@ func (api *API) Register(r *route.Router) {
 	r.Post("/bomc/webhook", ihf("webhook", api.webhook))
 	r.Get("/bomc", ihf("list_bomcs", api.listBomcs))
 	r.Post("/bomc", ihf("add_bomcs", api.addBomcs))
-	r.Put("/bomc/:bomcid", ihf("update_bomcs", api.updateBomc))
-	r.Del("/bomc/:bomcid", ihf("delete_bomcs", api.deleteBomc))
+	r.Put("/bomc/:bomcId", ihf("update_bomcs", api.updateBomc))
+	r.Del("/bomc/:bomcId", ihf("delete_bomcs", api.deleteBomc))
 
 	r.Get("/silences", ihf("list_silences", api.listSilences))
 	r.Post("/silences", ihf("add_silence", api.setSilence))
@@ -791,7 +790,7 @@ func (api *API) addAlarm(w http.ResponseWriter, r *http.Request) {
 	}
 	rd := bufio.NewReader(file)
 	var result AlertJsonStruct
-	fmt.Printf("request body", r.Body)
+	fmt.Printf("request body %s", r.Body)
 	if err := receive(r, &result); err != nil {
 		respondError(w, apiError{
 			typ: errorBadData,
@@ -1326,8 +1325,6 @@ func respondError(w http.ResponseWriter, apiErr apiError, data interface{}) {
 }
 
 func receive(r *http.Request, v interface{}) error {
-	icontent, _ := ioutil.ReadAll(r.Body)
-	fmt.Printf("=============%s", string(icontent))
 	dec := json.NewDecoder(r.Body)
 	defer r.Body.Close()
 
@@ -1388,7 +1385,7 @@ func (api *API) addBomcs(w http.ResponseWriter, r *http.Request) {
 func (api *API) updateBomc(w http.ResponseWriter, r *http.Request) {
 	api.mtx.Lock()
 	defer api.mtx.Unlock()
-	bomcID := route.Param(r.Context(), "bomcID")
+	bomcID := route.Param(r.Context(), "bomcId")
 	var user Bomc
 	if err := receive(r, &user); err != nil {
 		respondError(w, apiError{
@@ -1419,8 +1416,8 @@ func (api *API) updateBomc(w http.ResponseWriter, r *http.Request) {
 func (api *API) deleteBomc(w http.ResponseWriter, r *http.Request) {
 	api.mtx.Lock()
 	defer api.mtx.Unlock()
-	bomcID := route.Param(r.Context(), "bomcID")
-
+	bomcID := route.Param(r.Context(), "bomcId")
+	fmt.Printf("======= bomc %s", bomcID)
 	db, err := sql.Open("sqlite3", "./modal.db")
 	defer db.Close()
 	_, err = db.Exec("CREATE TABLE  IF NOT EXISTS bomc(Bid INTEGER PRIMARY KEY AUTOINCREMENT,bomcID VARCHAR(50) NOT NULL,description VARCHAR(128) NOT NULL)")

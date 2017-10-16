@@ -1,0 +1,10 @@
+[
+    {
+        "bomcID": "TEST123",
+        "description": "test"
+    },
+    {
+        "bomcID": "TEST1234",
+        "description": "test"
+    }
+]
