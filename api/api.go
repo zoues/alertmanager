@@ -265,15 +265,13 @@ type Bomc struct {
 
 func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
 	var s AlarmJsonStruct
-	/*
-		grade := map[string]string{
-			"critical": "4",
-			"major":    "3",
-			"minor":    "2",
-			"warning":  "1",
-		}
-		fmt.Printf("json post reciver %s", r)
-	*/
+
+	grade := map[string]string{
+		"critical": "重大告警",
+		"major":    "严重告警",
+		"minor":    "中等告警",
+		"warning":  "一般告警",
+	}
 
 	if err := receive(r, &s); err != nil {
 		respondError(w, apiError{
@@ -291,11 +289,8 @@ func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
 			caseID = alert.Labels.AlertName
 		}
 
-		startAt, err := time.Parse("YYYY-MM-DD_hh:mm:ss", alert.StartsAt)
-		if err != nil {
-			panic(err)
-		}
-
+		startAt := time.Now().Format("2006-01-02__15:04:05")
+		fmt.Printf("======%s", startAt)
 		description := strings.Split(alert.Annotations.Description, ":")
 		ALARM := strings.Split(alert.Annotations.Description, "#")
 
@@ -305,24 +300,13 @@ func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
 		if strings.Split(alert.Annotations.Description, ":")[1] == "node" {
 			Source = alert.Labels.Instance
 		} else {
-			Source = strings.Split(alert.Annotations.Description, ":")[7]
+			Source = strings.Split(alert.Annotations.Description, ":")[1]
 		}
+		descriptionRevoke := fmt.Sprintf("组件%s下%s的%s阈值达到%s触发告警，告警级别为%s", description[1], description[2], description[3], description[4], grade[alert.Labels.Severity])
+		cmd := exec.Command("echo", `-e`, "9001.221", Source, description[1],
+			ALARMID, caseID, descriptionRevoke,
+			"1", description[4], startAt)
 
-		cmd := exec.Command("echo", `-e`, `$OID`, `$COMPONENT`, `$ALERTGROUP`,
-			`$ALARMID`, `$INSTANCE`, `$ALARMCONTENT`,
-			`$REVOKEID`, `$VALUE`, `$TIME`)
-
-		cmd.Env = append(os.Environ(),
-			"OID=9001.221",
-			"COMPONENT="+Source,
-			"ALERTGROUP="+description[1],
-			"ALARMID="+ALARMID,
-			"INSTANCE="+caseID,
-			"ALARMCONTENT="+alert.Annotations.Description,
-			"REVOKEID=1",
-			"VALUE="+description[4],
-			"TIME="+startAt.String(),
-		)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			fmt.Println(err)
