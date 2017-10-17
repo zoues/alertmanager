@@ -288,9 +288,10 @@ func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
 		} else {
 			caseID = alert.Labels.AlertName
 		}
-
-		startAt := time.Now().Format("2006-01-02__15:04:05")
-		fmt.Printf("======%s", startAt)
+		fmt.Printf("1、======%s", alert.StartsAt)
+		temp, _ := time.Parse(time.RFC3339, alert.StartsAt)
+		startAt := temp.Format("2006-01-02__15:04:05")
+		fmt.Printf("2、======%s", startAt)
 		description := strings.Split(alert.Annotations.Description, ":")
 		ALARM := strings.Split(alert.Annotations.Description, "#")
 
