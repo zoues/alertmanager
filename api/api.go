@@ -304,7 +304,7 @@ func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
 			Source = strings.Split(alert.Annotations.Description, ":")[1]
 		}
 		descriptionRevoke := fmt.Sprintf("组件%s下%s的%s阈值达到%s触发告警，告警级别为%s", description[1], description[2], description[3], description[4], grade[alert.Labels.Severity])
-		cmd := exec.Command("echo", `-e`, "9001.221", Source, description[1],
+		cmd := exec.Command("trap4j", "9001.221", Source, description[1],
 			ALARMID, caseID, descriptionRevoke,
 			"1", description[4], startAt)
 
