@@ -1450,10 +1450,10 @@ func (api *API) monitor(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			panic(err)
 		}
-		fmt.Printf("s.Alerts[i].Labels.Group :%#v,len:%#v\n", s.Alerts[i].Labels.Group, len(s.Alerts[i].Labels.Group))
+		fmt.Printf("s.Alerts[i].Labels.Group :%#v,len:%#v\n", s.Alerts[i], len(s.Alerts[i].Labels.Group))
 		fmt.Printf("s description :%#v", strings.Split(s.Alerts[i].Annotations.Description, ":"))
 		if strings.Split(s.Alerts[i].Annotations.Description, ":")[1] == "node" {
-			st.Name = s.Alerts[i].Labels.Group
+			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
 			st.Members = Member{Source: s.Alerts[i].Labels.Instance, Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: s.Alerts[i].Annotations.Description}
 		} else {
 			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
@@ -1468,15 +1468,15 @@ func (api *API) monitor(w http.ResponseWriter, r *http.Request) {
 		fmt.Println(err.Error())
 		return
 	}
-	bomcDir := "/home/prometheus"
-	if _, err := os.Stat("/home/prometheus"); os.IsNotExist(err) {
-		err := os.MkdirAll("/home/prometheus", 0777)
+	bomcDir := "/toptea/agent/data"
+	if _, err := os.Stat(bomcDir); os.IsNotExist(err) {
+		err := os.MkdirAll(bomcDir, 0777)
 		if err != nil {
 			fmt.Print(err)
 		}
 		fmt.Printf("Dir %s has been created", bomcDir)
 	}
-	file, err := os.Create("/home/prometheus/" + fmt.Sprintf("%d~%s", time.Now().Unix(), GetRandomString(28)) + "~stdxml.dat")
+	file, err := os.Create(bomcDir + fmt.Sprintf("%d~%s", time.Now().Unix(), GetRandomString(28)) + "~stdxml.dat")
 	file.Write([]byte(Header))
 	file.Write(output)
 	respond(w, "convert success")
