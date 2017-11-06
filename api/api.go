@@ -238,6 +238,7 @@ func (api *API) Register(r *route.Router) {
 	r.Del("/alarms/:alarmname", ihf("del_alarm", api.delAlarm))
 
 	// bomc alarm
+	r.Post("/bomc/monitor", ihf("monitor", api.monitor))
 	r.Post("/bomc/webhook", ihf("webhook", api.webhook))
 	r.Get("/bomc", ihf("list_bomcs", api.listBomcs))
 	r.Post("/bomc", ihf("add_bomcs", api.addBomcs))
@@ -1418,4 +1419,65 @@ func (api *API) deleteBomc(w http.ResponseWriter, r *http.Request) {
 
 	respond(w, res)
 
+}
+
+const Header = `<?xml version="1.0" encoding="gb2312"?>` + "\n"
+
+// monitor:convert post json to xml
+func (api *API) monitor(w http.ResponseWriter, r *http.Request) {
+	var s AlarmJsonStruct
+	var m Result
+	var st Struct
+	grade := map[string]string{
+		"critical": "4",
+		"major":    "3",
+		"minor":    "2",
+		"warning":  "1",
+	}
+	//fmt.Printf("json post reciver %s", r)
+	if err := receive(r, &s); err != nil {
+		respondError(w, apiError{
+			typ: errorBadData,
+			err: err,
+		}, nil)
+		return
+	}
+	for i := 0; i < len(s.Alerts); i++ {
+		//fmt.Printf("%#v", s.Alerts[i].Labels)
+		caseId := s.Alerts[i].Labels.AlertName + s.Alerts[i].Labels.Instance
+
+		startAt, err := time.Parse(time.RFC3339Nano, s.Alerts[i].StartsAt)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Printf("s.Alerts[i].Labels.Group :%#v,len:%#v\n", s.Alerts[i].Labels.Group, len(s.Alerts[i].Labels.Group))
+		fmt.Printf("s description :%#v", strings.Split(s.Alerts[i].Annotations.Description, ":"))
+		if strings.Split(s.Alerts[i].Annotations.Description, ":")[1] == "node" {
+			st.Name = s.Alerts[i].Labels.Group
+			st.Members = Member{Source: s.Alerts[i].Labels.Instance, Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: s.Alerts[i].Annotations.Description}
+		} else {
+			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
+			st.Members = Member{Source: strings.Split(s.Alerts[i].Annotations.Description, ":")[7], Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: s.Alerts[i].Annotations.Description}
+		}
+
+		m.Structs = append(m.Structs, st)
+	}
+	//fmt.Printf("%#v", m)
+	output, err := xml.MarshalIndent(m, " ", " ")
+	if err != nil {
+		fmt.Println(err.Error())
+		return
+	}
+	bomcDir := "/home/prometheus"
+	if _, err := os.Stat("/home/prometheus"); os.IsNotExist(err) {
+		err := os.MkdirAll("/home/prometheus", 0777)
+		if err != nil {
+			fmt.Print(err)
+		}
+		fmt.Printf("Dir %s has been created", bomcDir)
+	}
+	file, err := os.Create("/home/prometheus/" + fmt.Sprintf("%d~%s", time.Now().Unix(), GetRandomString(28)) + "~stdxml.dat")
+	file.Write([]byte(Header))
+	file.Write(output)
+	respond(w, "convert success")
 }
