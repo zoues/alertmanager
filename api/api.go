@@ -1475,7 +1475,7 @@ func (api *API) monitor(w http.ResponseWriter, r *http.Request) {
 		fmt.Println(err.Error())
 		return
 	}
-	bomcDir := "/toptea/agent/data"
+	bomcDir := "/toptea/agent/data/"
 	if _, err := os.Stat(bomcDir); os.IsNotExist(err) {
 		err := os.MkdirAll(bomcDir, 0777)
 		if err != nil {
