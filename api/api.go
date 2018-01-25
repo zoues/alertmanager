@@ -1451,13 +1451,17 @@ func (api *API) monitor(w http.ResponseWriter, r *http.Request) {
 			panic(err)
 		}
 		fmt.Printf("s.Alerts[i] :%#v\n", s.Alerts[i])
+		descr := strings.Split(s.Alerts[i].Annotations.Description, ":")
 		fmt.Printf("s description :%#v", strings.Split(s.Alerts[i].Annotations.Description, ":"))
-		if strings.Split(s.Alerts[i].Annotations.Description, ":")[1] == "node" {
+		if descr[1] == "node" {
 			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
 			st.Members = Member{Source: s.Alerts[i].Labels.Instance, Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: s.Alerts[i].Annotations.Description}
+		} else if descr[1] == "cluster" {
+			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
+			st.Members = Member{Source: strings.Split(s.Alerts[i].Annotations.Description, ":")[1], Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: s.Alerts[i].Annotations.Description}
 		} else {
 			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
-			st.Members = Member{Source: strings.Split(s.Alerts[i].Annotations.Description, ":")[7], Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: s.Alerts[i].Annotations.Description}
+			st.Members = Member{Source: strings.Split(descr[6], "#")[0], Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: s.Alerts[i].Annotations.Description}
 		}
 
 		m.Structs = append(m.Structs, st)
