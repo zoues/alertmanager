@@ -1450,7 +1450,7 @@ func (api *API) monitor(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			panic(err)
 		}
-		fmt.Printf("s.Alerts[i] :%#v,len:%#v\n", s.Alerts[i], len(s.Alerts[i]))
+		fmt.Printf("s.Alerts[i] :%#v\n", s.Alerts[i])
 		fmt.Printf("s description :%#v", strings.Split(s.Alerts[i].Annotations.Description, ":"))
 		if strings.Split(s.Alerts[i].Annotations.Description, ":")[1] == "node" {
 			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
