@@ -86,9 +86,6 @@ func (a *Alert) Validate() error {
 	if a.StartsAt.IsZero() {
 		return fmt.Errorf("start time missing")
 	}
-	if !a.EndsAt.IsZero() && a.EndsAt.Before(a.StartsAt) {
-		return fmt.Errorf("start time must be before end time")
-	}
 	if err := a.Labels.Validate(); err != nil {
 		return fmt.Errorf("invalid label set: %s", err)
 	}
