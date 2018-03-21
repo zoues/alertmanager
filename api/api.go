@@ -1503,5 +1503,6 @@ func (api *API) monitor(w http.ResponseWriter, r *http.Request) {
 	tempC := mahonia.NewDecoder("gbk")
 	file.Write([]byte(tempC.ConvertString(Header)))
 	file.Write(output)
+        fmt.Printf("1、alert has arrived =========== json post reciver %s", r
 	respond(w, "convert success")
 }
