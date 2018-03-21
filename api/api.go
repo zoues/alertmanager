@@ -50,6 +50,8 @@ import (
 	"github.com/prometheus/alertmanager/silence/silencepb"
 	"github.com/prometheus/alertmanager/types"
 	"github.com/weaveworks/mesh"
+
+	"code.google.com/p/mahonia"
 )
 
 var (
@@ -289,10 +291,10 @@ func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
 		} else {
 			caseID = alert.Labels.AlertName
 		}
-		fmt.Printf("1、======%s", alert.StartsAt)
+
 		temp, _ := time.Parse(time.RFC3339, alert.StartsAt)
 		startAt := temp.Format("2006-01-02__15:04:05")
-		fmt.Printf("2、======%s", startAt)
+
 		description := strings.Split(alert.Annotations.Description, ":")
 		ALARM := strings.Split(alert.Annotations.Description, "#")
 
@@ -304,16 +306,30 @@ func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
 		} else {
 			Source = strings.Split(alert.Annotations.Description, ":")[1]
 		}
-		descriptionRevoke := fmt.Sprintf("组件%s下%s的%s阈值达到%s触发告警，告警级别为%s", description[1], description[2], description[3], description[4], grade[alert.Labels.Severity])
-		cmd := exec.Command("trap4j", "9001.221", Source, description[1],
-			ALARMID, caseID, descriptionRevoke,
-			"1", description[4], startAt)
+		descriptionRevoke := fmt.Sprintf("%s下%s的%s阈值达到%s触发告警，告警级别为%s", description[1], description[2], description[3], description[4], grade[alert.Labels.Severity])
+
+		sendTime := time.Now().Format("01/02/2006_15:04:05")
+		cmd := exec.Command("trap4j", "9001.221", Source, "DCOS云平台", ALARMID,
+			caseID, descriptionRevoke,
+			"1", "default8", sendTime, startAt)
+		cmd.Env = os.Environ()
+		cmd.Env = append(cmd.Env, "LANG=zh_CN.GBK")
+		fmt.Printf(`[1] 告警规则OID: 9001.221
+								[2] 告警节点IP: %s
+								[3] 告警分组: DCOS云平台
+								[4] 告警事件ID: %s
+								[5] 告警名称: %s
+								[6] 告警内容: %s
+								[7] 告警标识: 1
+								[8] 告警默认值: default8
+								[9] 触发时间: %s
+								[10] 发出时间: %s`, Source, ALARMID, caseID, descriptionRevoke, sendTime, startAt)
 
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			fmt.Println(err)
 		}
-		fmt.Printf("output:=======%s", out)
+		fmt.Printf("\noutput:=======%s", out)
 
 	}
 
@@ -1484,7 +1500,8 @@ func (api *API) monitor(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("Dir %s has been created", bomcDir)
 	}
 	file, err := os.Create(bomcDir + fmt.Sprintf("%d~%s", time.Now().Unix(), GetRandomString(28)) + "~stdxml.dat")
-	file.Write([]byte(Header))
+	tempC := mahonia.NewDecoder("gbk")
+	file.Write([]byte(tempC.ConvertString(Header)))
 	file.Write(output)
 	respond(w, "convert success")
 }

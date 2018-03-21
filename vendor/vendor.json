@@ -3,6 +3,10 @@
 	"ignore": "test",
 	"package": [
 		{
+			"path": "code.google.com/p/mahonia",
+			"revision": ""
+		},
+		{
 			"checksumSHA1": "DYv6Q1+VfnUVxMwvk5IshAClLvw=",
 			"path": "github.com/Sirupsen/logrus",
 			"revision": "5e5dc898656f695e2a086b8e12559febbfc01562",
