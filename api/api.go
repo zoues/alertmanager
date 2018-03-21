@@ -1458,6 +1458,7 @@ func (api *API) monitor(w http.ResponseWriter, r *http.Request) {
 		}, nil)
 		return
 	}
+	tempC := mahonia.NewDecoder("gbk")
 	for i := 0; i < len(s.Alerts); i++ {
 		//fmt.Printf("%#v", s.Alerts[i].Labels)
 		caseId := s.Alerts[i].Labels.AlertName + s.Alerts[i].Labels.Instance
@@ -1472,14 +1473,17 @@ func (api *API) monitor(w http.ResponseWriter, r *http.Request) {
 		if descr[1] == "node" {
 			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
 			d := fmt.Sprintf("主机：%s 在%s触及告警条件: %s %s %s, 告警级别: %s", s.Alerts[i].Labels.Instance, startAt.Format("2006-01-02 15:04:05"), descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])
+			d = tempC.ConvertString(d)
 			st.Members = Member{Source: s.Alerts[i].Labels.Instance, Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: d}
 		} else if descr[1] == "cluster" {
 			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
 			d := fmt.Sprintf(" 集群在%s触及告警条件: %s %s %s, 告警级别: %s", startAt.Format("2006-01-02 15:04:05"), descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])
+			d = tempC.ConvertString(d)
 			st.Members = Member{Source: strings.Split(s.Alerts[i].Annotations.Description, ":")[1], Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: d}
 		} else {
 			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
 			d := fmt.Sprintf("用户%s在%s域下的应用：%s 在%s触及告警条件: %s %s %s, 告警级别: %s", strings.Split(descr[6], "#")[2], strings.Split(descr[6], "#")[1], s.Alerts[i].Labels.Instance, startAt.Format("2006-01-02 15:04:05"), descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])
+			d = tempC.ConvertString(d)
 			st.Members = Member{Source: strings.Split(descr[6], "#")[0], Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: d}
 		}
 
@@ -1500,9 +1504,9 @@ func (api *API) monitor(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("Dir %s has been created", bomcDir)
 	}
 	file, err := os.Create(bomcDir + fmt.Sprintf("%d~%s", time.Now().Unix(), GetRandomString(28)) + "~stdxml.dat")
-	tempC := mahonia.NewDecoder("gbk")
+	
 	file.Write([]byte(tempC.ConvertString(Header)))
 	file.Write(output)
-        fmt.Printf("1、alert has arrived =========== json post reciver %s", r
+    fmt.Printf("alert has been writed =========== ")
 	respond(w, "convert success")
 }
