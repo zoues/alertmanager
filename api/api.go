@@ -51,7 +51,8 @@ import (
 	"github.com/prometheus/alertmanager/types"
 	"github.com/weaveworks/mesh"
 
-	"code.google.com/p/mahonia"
+	"github.com/golang/text/encoding/simplifiedchinese"
+    "github.com/golang/text/transform"
 )
 
 var (
@@ -241,6 +242,7 @@ func (api *API) Register(r *route.Router) {
 
 	// bomc alarm
 	r.Post("/bomc/monitor", ihf("monitor", api.monitor))
+	r.Post("/bomc/monitorJS", ihf("monitorJS", api.monitorJS))
 	r.Post("/bomc/webhook", ihf("webhook", api.webhook))
 	r.Get("/bomc", ihf("list_bomcs", api.listBomcs))
 	r.Post("/bomc", ihf("add_bomcs", api.addBomcs))
@@ -1458,7 +1460,7 @@ func (api *API) monitor(w http.ResponseWriter, r *http.Request) {
 		}, nil)
 		return
 	}
-	tempC := mahonia.NewDecoder("gbk")
+	
 	for i := 0; i < len(s.Alerts); i++ {
 		//fmt.Printf("%#v", s.Alerts[i].Labels)
 		caseId := s.Alerts[i].Labels.AlertName + s.Alerts[i].Labels.Instance
@@ -1473,17 +1475,92 @@ func (api *API) monitor(w http.ResponseWriter, r *http.Request) {
 		if descr[1] == "node" {
 			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
 			d := fmt.Sprintf("主机：%s 在%s触及告警条件: %s %s %s, 告警级别: %s", s.Alerts[i].Labels.Instance, startAt.Format("2006-01-02 15:04:05"), descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])
-			d = tempC.ConvertString(d)
+			
 			st.Members = Member{Source: s.Alerts[i].Labels.Instance, Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: d}
 		} else if descr[1] == "cluster" {
 			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
 			d := fmt.Sprintf(" 集群在%s触及告警条件: %s %s %s, 告警级别: %s", startAt.Format("2006-01-02 15:04:05"), descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])
-			d = tempC.ConvertString(d)
+			
 			st.Members = Member{Source: strings.Split(s.Alerts[i].Annotations.Description, ":")[1], Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: d}
 		} else {
 			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
 			d := fmt.Sprintf("用户%s在%s域下的应用：%s 在%s触及告警条件: %s %s %s, 告警级别: %s", strings.Split(descr[6], "#")[2], strings.Split(descr[6], "#")[1], s.Alerts[i].Labels.Instance, startAt.Format("2006-01-02 15:04:05"), descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])
-			d = tempC.ConvertString(d)
+			
+			st.Members = Member{Source: strings.Split(descr[6], "#")[0], Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: d}
+		}
+
+		m.Structs = append(m.Structs, st)
+	}
+	//fmt.Printf("%#v", m)
+	output, err := xml.MarshalIndent(m, " ", " ")
+	tempInput := bytes.NewReader(ouput)
+	tempOutput := transform.NewReader(tempInput, simplifiedchinese.GBK.NewEncoder())
+    encodePut, e := ioutil.ReadAll(tempOutput)
+	if err != nil {
+		fmt.Println(err.Error())
+		return
+	}
+	bomcDir := "/toptea/agent/data/"
+	if _, err := os.Stat(bomcDir); os.IsNotExist(err) {
+		err := os.MkdirAll(bomcDir, 0777)
+		if err != nil {
+			fmt.Print(err)
+		}
+		fmt.Printf("Dir %s has been created", bomcDir)
+	}
+	file, err := os.Create(bomcDir + fmt.Sprintf("%d~%s", time.Now().Unix(), GetRandomString(28)) + "~stdxml.dat")
+	
+	file.Write([]byte(Header))
+	file.Write(encodePut)
+    fmt.Printf("alert has been writed =========== ")
+	respond(w, "convert success")
+}
+
+// monitorJS:convert post json to xml
+func (api *API) monitorJS(w http.ResponseWriter, r *http.Request) {
+	var s AlarmJsonStruct
+	var m Result
+	var st Struct
+	grade := map[string]string{
+		"critical": "4",
+		"major":    "3",
+		"minor":    "2",
+		"warning":  "1",
+	}
+	//fmt.Printf("json post reciver %s", r)
+	if err := receive(r, &s); err != nil {
+		respondError(w, apiError{
+			typ: errorBadData,
+			err: err,
+		}, nil)
+		return
+	}
+	
+	for i := 0; i < len(s.Alerts); i++ {
+		//fmt.Printf("%#v", s.Alerts[i].Labels)
+		caseId := s.Alerts[i].Labels.AlertName + s.Alerts[i].Labels.Instance
+
+		startAt, err := time.Parse(time.RFC3339Nano, s.Alerts[i].StartsAt)
+		if err != nil {
+			panic(err)
+		}
+		fmt.Printf("s.Alerts[i] :%#v\n", s.Alerts[i])
+		descr := strings.Split(s.Alerts[i].Annotations.Description, ":")
+		fmt.Printf("s description :%#v", strings.Split(s.Alerts[i].Annotations.Description, ":"))
+		if descr[1] == "node" {
+			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
+			d := fmt.Sprintf("node：%s has been reached threshold %s: %s %s %s, alert grade: %s", s.Alerts[i].Labels.Instance, startAt.Format("2006-01-02 15:04:05"), descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])
+			
+			st.Members = Member{Source: s.Alerts[i].Labels.Instance, Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: d}
+		} else if descr[1] == "cluster" {
+			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
+			d := fmt.Sprintf(" cluster %s has been reached threshold: %s %s %s, alert grade: %s", startAt.Format("2006-01-02 15:04:05"), descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])
+			
+			st.Members = Member{Source: strings.Split(s.Alerts[i].Annotations.Description, ":")[1], Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: d}
+		} else {
+			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
+			d := fmt.Sprintf("user %s in %s namespace that application %s in %s  has been reached threshold: %s %s %s, alert grade: %s", strings.Split(descr[6], "#")[2], strings.Split(descr[6], "#")[1], s.Alerts[i].Labels.Instance, startAt.Format("2006-01-02 15:04:05"), descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])
+			
 			st.Members = Member{Source: strings.Split(descr[6], "#")[0], Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: d}
 		}
 
@@ -1505,7 +1582,7 @@ func (api *API) monitor(w http.ResponseWriter, r *http.Request) {
 	}
 	file, err := os.Create(bomcDir + fmt.Sprintf("%d~%s", time.Now().Unix(), GetRandomString(28)) + "~stdxml.dat")
 	
-	file.Write([]byte(tempC.ConvertString(Header)))
+	file.Write([]byte(Header))
 	file.Write(output)
     fmt.Printf("alert has been writed =========== ")
 	respond(w, "convert success")
