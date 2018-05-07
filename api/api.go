@@ -14,6 +14,8 @@
 package api
 
 import (
+	"bytes"
+	"io/ioutil"
 	"bufio"
 	"crypto/md5"
 	"database/sql"
@@ -32,7 +34,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-
+	"strconv"
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -51,8 +53,8 @@ import (
 	"github.com/prometheus/alertmanager/types"
 	"github.com/weaveworks/mesh"
 
-	"github.com/golang/text/encoding/simplifiedchinese"
-    "github.com/golang/text/transform"
+	"golang.org/x/text/encoding/simplifiedchinese"
+    "golang.org/x/text/transform"
 )
 
 var (
@@ -803,7 +805,15 @@ func (api *API) addAlarm(w http.ResponseWriter, r *http.Request) {
 		}, nil)
 		return
 	}
-	fmt.Printf("add alarm %#v", result)
+
+
+	result.AlertAddition, err = strconv.Unquote(result.AlertAddition)
+	fmt.Printf("add alarm %#v\n", result)
+	if err != nil {
+		http.Error(w, fmt.Sprint("Error getting alarms: ", err), http.StatusNotFound)
+		return
+	}
+	
 	for {
 		line, err := rd.ReadString('\n')
 		line = strings.Replace(line, "\n", "", -1)
@@ -1493,9 +1503,9 @@ func (api *API) monitor(w http.ResponseWriter, r *http.Request) {
 	}
 	//fmt.Printf("%#v", m)
 	output, err := xml.MarshalIndent(m, " ", " ")
-	tempInput := bytes.NewReader(ouput)
+	tempInput := bytes.NewReader(output)
 	tempOutput := transform.NewReader(tempInput, simplifiedchinese.GBK.NewEncoder())
-    encodePut, e := ioutil.ReadAll(tempOutput)
+    encodePut, err := ioutil.ReadAll(tempOutput)
 	if err != nil {
 		fmt.Println(err.Error())
 		return
