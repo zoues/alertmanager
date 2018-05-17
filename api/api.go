@@ -117,6 +117,7 @@ type AlertJsonStruct struct {
 	AlertTime        string `json:"for"`
 	AlertSeverity    Labels `json:"labels"`
 	AlertDescription string `json:"annotations"`
+	AlertSilenceID     string   `json:"silenceID"`
 }
 
 type alertsResponseJSONStruct struct {
@@ -781,6 +782,64 @@ func (api *API) listAlarms(w http.ResponseWriter, r *http.Request) {
 
 		}
 	}
+
+	// construct silence info 
+	psils, err := api.silences.Query()
+	if err != nil {
+		respondError(w, apiError{
+			typ: errorInternal,
+			err: err,
+		}, nil)
+		return
+	}
+
+	matchers := []*labels.Matcher{}
+	if filter := r.FormValue("filter"); filter != "" {
+		matchers, err = parse.Matchers(filter)
+		if err != nil {
+			respondError(w, apiError{
+				typ: errorBadData,
+				err: err,
+			}, nil)
+			return
+		}
+	}
+
+	sils := []*types.Silence{}
+	for _, ps := range psils {
+		s, err := silenceFromProto(ps)
+		if err != nil {
+			respondError(w, apiError{
+				typ: errorInternal,
+				err: err,
+			}, nil)
+			return
+		}
+
+		if !matchesFilterLabels(s, matchers) {
+			continue
+		}
+		sils = append(sils, s)
+	}
+
+	var active map[string]string
+
+	for _, s := range sils {
+		name := s.Matchers[0].Name
+		switch s.Status.State {
+		case "active":
+			active[name] = s.ID
+		}
+	}
+
+	// add silence info to alert list
+	for i, alert := range rs.Array {
+		if len(active[alert.AlertName]) > 0 {
+			alert.AlertSilenceID = active[alert.AlertName]
+			rs.Array[i] = alert
+		}
+	}
+
 	respond(w, &rs)
 }
 
