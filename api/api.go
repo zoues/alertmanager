@@ -23,7 +23,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"html/template"
+	"text/template"
 	"io"
 	"math/rand"
 	"net/http"
@@ -34,7 +34,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"strconv"
+	
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -792,8 +792,11 @@ func (api *API) addAlarm(w http.ResponseWriter, r *http.Request) {
 	var al AlertJsonStruct
 	file, err := os.Open("/etc/alertmanager/alert.rules")
 	if err != nil {
-		http.Error(w, fmt.Sprint("Error getting alarms: ", err), http.StatusNotFound)
-		return
+		if ! os.IsNotExist(err){
+			http.Error(w, fmt.Sprint("Error getting alarms: ", err), http.StatusNotFound)
+			return
+		}
+		file, err = os.Create("/etc/alertmanager/alert.rules")
 	}
 	rd := bufio.NewReader(file)
 	var result AlertJsonStruct
@@ -806,9 +809,6 @@ func (api *API) addAlarm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-
-	result.AlertAddition, err = strconv.Unquote(result.AlertAddition)
-	fmt.Printf("add alarm %#v\n", result)
 	if err != nil {
 		http.Error(w, fmt.Sprint("Error getting alarms: ", err), http.StatusNotFound)
 		return
