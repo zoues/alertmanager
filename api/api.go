@@ -288,7 +288,7 @@ func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
 		}, nil)
 		return
 	}
-	for _, alert := range s.Alerts {
+	for i, alert := range s.Alerts {
 		var Source, caseID, ALARMID string
 
 		if alert.Labels.Instance != "" {
@@ -306,29 +306,37 @@ func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
 		if len(ALARM) == 3 {
 			ALARMID = ALARM[2]
 		}
+
+		descr := strings.Split(alert.Annotations.Description, ":")
+		var descriptionRevoke string
 		if strings.Split(alert.Annotations.Description, ":")[1] == "node" {
 			Source = alert.Labels.Instance
 		} else {
 			Source = strings.Split(alert.Annotations.Description, ":")[1]
 		}
-		descriptionRevoke := fmt.Sprintf("%s下%s的%s阈值达到%s触发告警，告警级别为%s", description[1], description[2], description[3], description[4], grade[alert.Labels.Severity])
-
+		if descr[1] == "node" {			
+			descriptionRevoke := fmt.Sprintf("node：%s has been reached threshold %s: %s %s %s, alert grade: %s", s.Alerts[i].Labels.Instance, startAt.Format("2006-01-02 15:04:05"), descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])		
+		} else if descr[1] == "cluster" {		
+			descriptionRevoke := fmt.Sprintf(" cluster %s has been reached threshold: %s %s %s, alert grade: %s", startAt, descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])			
+		} else {			
+			descriptionRevoke := fmt.Sprintf("user %s in %s namespace that application %s in %s  has been reached threshold: %s %s %s, alert grade: %s", strings.Split(descr[6], "#")[2], strings.Split(descr[6], "#")[1], s.Alerts[i].Labels.Instance, startAt.Format("2006-01-02 15:04:05"), descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])		
+		}
 		sendTime := time.Now().Format("01/02/2006_15:04:05")
-		cmd := exec.Command("trap4j", "9001.221", Source, "DCOS云平台", ALARMID,
+		cmd := exec.Command("trap4j", "9001.221", Source, "DCOS platform", ALARMID,
 			caseID, descriptionRevoke,
 			"1", "default8", sendTime, startAt)
 		cmd.Env = os.Environ()
 		cmd.Env = append(cmd.Env, "LANG=zh_CN.GBK")
-		fmt.Printf(`[1] 告警规则OID: 9001.221
-								[2] 告警节点IP: %s
-								[3] 告警分组: DCOS云平台
-								[4] 告警事件ID: %s
-								[5] 告警名称: %s
-								[6] 告警内容: %s
-								[7] 告警标识: 1
-								[8] 告警默认值: default8
-								[9] 触发时间: %s
-								[10] 发出时间: %s`, Source, ALARMID, caseID, descriptionRevoke, sendTime, startAt)
+		fmt.Printf(`[1] Alarm Rule OID: 9001.221
+								[2] Alarm Node IP: %s
+								[3] Alarm Group: DCOS platform
+								[4] Alarm Event ID: %s
+								[5] Alarm Name: %s
+								[6] Alarm Content: %s
+								[7] Alarm Singal: 0
+								[8] Alarm Default Value: default8
+								[9] Alarm Triger Time: %s
+								[10] Alarm Send Time: %s`, Source, ALARMID, caseID, descriptionRevoke, sendTime, startAt)
 
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -823,9 +831,10 @@ func (api *API) listAlarms(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var active map[string]string
+	active = make(map[string]string)
 
 	for _, s := range sils {
-		name := s.Matchers[0].Name
+		name := s.Matchers[0].Value
 		switch s.Status.State {
 		case "active":
 			active[name] = s.ID
@@ -1619,18 +1628,22 @@ func (api *API) monitorJS(w http.ResponseWriter, r *http.Request) {
 		if descr[1] == "node" {
 			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
 			d := fmt.Sprintf("node：%s has been reached threshold %s: %s %s %s, alert grade: %s", s.Alerts[i].Labels.Instance, startAt.Format("2006-01-02 15:04:05"), descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])
-			
 			st.Members = Member{Source: s.Alerts[i].Labels.Instance, Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: d}
 		} else if descr[1] == "cluster" {
 			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
 			d := fmt.Sprintf(" cluster %s has been reached threshold: %s %s %s, alert grade: %s", startAt.Format("2006-01-02 15:04:05"), descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])
 			
 			st.Members = Member{Source: strings.Split(s.Alerts[i].Annotations.Description, ":")[1], Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: d}
+		} else if descr[1] == "component" {
+			// "component-0:component-1:status-2:-3:=down-4:5m-5:critical-6:all#bass#suyan"
+			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
+			d := fmt.Sprintf("component instance %s has been reached threshold %s: %s %s %s, alert grade: %s", s.Alerts[i].Labels.Instance, startAt.Format("2006-01-02 15:04:05"), descr[2], descr[3], descr[4], grade[s.Alerts[i].Labels.Severity])
+			st.Members = Member{Source: strings.Split(descr[7], "#")[0], Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: d}
 		} else {
+			// "test:app:cpus:sum:>=0.8:5m:warning:app-backend#kube-system#admin"
 			st.Name = strings.Split(s.Alerts[i].Annotations.Description, ":")[1]
 			d := fmt.Sprintf("user %s in %s namespace that application %s in %s  has been reached threshold: %s %s %s, alert grade: %s", strings.Split(descr[6], "#")[2], strings.Split(descr[6], "#")[1], s.Alerts[i].Labels.Instance, startAt.Format("2006-01-02 15:04:05"), descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])
-			
-			st.Members = Member{Source: strings.Split(descr[6], "#")[0], Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: d}
+			st.Members = Member{Source: strings.Split(descr[7], "#")[0], Code: s.Alerts[i].Labels.AlertName, Grade: grade[s.Alerts[i].Labels.Severity], Time: startAt.Format("2006-01-02 15:04:05"), CaseId: GetMd5String(caseId), Description: d}
 		}
 
 		m.Structs = append(m.Structs, st)
