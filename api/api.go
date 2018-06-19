@@ -315,11 +315,11 @@ func (api *API) webhook(w http.ResponseWriter, r *http.Request) {
 			Source = strings.Split(alert.Annotations.Description, ":")[1]
 		}
 		if descr[1] == "node" {			
-			descriptionRevoke := fmt.Sprintf("node：%s has been reached threshold %s: %s %s %s, alert grade: %s", s.Alerts[i].Labels.Instance, startAt.Format("2006-01-02 15:04:05"), descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])		
+			descriptionRevoke = fmt.Sprintf("node：%s has been reached threshold: %s %s %s, alert grade: %s", s.Alerts[i].Labels.Instance, descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])		
 		} else if descr[1] == "cluster" {		
-			descriptionRevoke := fmt.Sprintf(" cluster %s has been reached threshold: %s %s %s, alert grade: %s", startAt, descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])			
+			descriptionRevoke = fmt.Sprintf(" cluster %s has been reached threshold: %s %s %s, alert grade: %s", startAt, descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])			
 		} else {			
-			descriptionRevoke := fmt.Sprintf("user %s in %s namespace that application %s in %s  has been reached threshold: %s %s %s, alert grade: %s", strings.Split(descr[6], "#")[2], strings.Split(descr[6], "#")[1], s.Alerts[i].Labels.Instance, startAt.Format("2006-01-02 15:04:05"), descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])		
+			descriptionRevoke = fmt.Sprintf("user %s in %s namespace that application %s has been reached threshold: %s %s %s, alert grade: %s", strings.Split(descr[7], "#")[2], strings.Split(descr[7], "#")[1], s.Alerts[i].Labels.Instance, descr[3], descr[4], descr[5], grade[s.Alerts[i].Labels.Severity])		
 		}
 		sendTime := time.Now().Format("01/02/2006_15:04:05")
 		cmd := exec.Command("trap4j", "9001.221", Source, "DCOS platform", ALARMID,
